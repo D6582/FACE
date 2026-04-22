@@ -145,11 +145,12 @@ export default {
 
 <style scoped>
 .monitor-container {
-  width: 1920px;
+  width: 100%;
   height: 810px;
   background: rgba(0,0,0,0.04);
   border-radius: 0px 0px 0px 0px;
   position: relative;
+  overflow-x: hidden;
 }
 
 .top-panel {
@@ -158,7 +159,7 @@ export default {
   background: #FFFFFF;
   border-radius: 19px;
   position: absolute;
-  left: 1720px;
+  right: 50px;
   top: 30px;
   display: flex;
   
@@ -180,7 +181,7 @@ export default {
   background: #FFFFFF;
   border-radius: 19px;
   position: absolute;
-  left: 81px;
+  left: 50px;
   top: 32px;
   display: flex;
   align-items: center;
@@ -221,11 +222,11 @@ export default {
 }
 
 .record-list-container {
-  width: 1780px;
+  left: 50px;
+  right: 50px;
   height: 640px;
   background: transparent;
   position: absolute;
-  left: 89px;
   top: 150px;
   overflow: hidden;
   display: flex;
@@ -245,7 +246,7 @@ export default {
 }
 
 .record-card {
-  width: 1780px;
+  width: 100%;
   height: 179px;
   background: #FFFFFF;
   border-radius: 19px;

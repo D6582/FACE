@@ -44,6 +44,7 @@ export default {
       currentAddress: '',
       isRecognizing: false,
       capturedImage: '',
+      searchImage: '',
       lastFaceImage: '',
       databaseImage: '',
       showDialog: false,
@@ -64,17 +65,20 @@ export default {
       this.showDialog = false;
     },
     searchInDatabase() {
-        if (!this.capturedImage) {
+        const imageToSend = this.searchImage || this.capturedImage;
+        if (!imageToSend) {
             this.showMessage("请先获取人像", "warning");
             return;
         }
         
+        this.showMessage("正在查询数据库...", "success"); // Add a loading indicator
+
         // Connect to search endpoint
         const ws = new WebSocket('ws://localhost:8765/search');
         
         ws.onopen = () => {
             console.log('Connected to server for search...');
-            ws.send(JSON.stringify({ image: this.capturedImage }));
+            ws.send(JSON.stringify({ image: imageToSend }));
         };
         
         ws.onmessage = (event) => {
@@ -112,11 +116,15 @@ export default {
     startRecognition() {
       if (this.isRecognizing) {
         // Stop recognition and capture image
-        if (this.lastFaceImage) {
+        // We save the full video frame for the search API because the backend 
+        // recognition model requires a large enough image to avoid "kernel size" errors.
+        if (this.videoSrc) {
+            this.searchImage = this.videoSrc; // Image sent to API
+            // For UI preview, prefer the cropped face if available, else use full frame
+            this.capturedImage = this.lastFaceImage ? this.lastFaceImage : this.videoSrc;
+        } else if (this.lastFaceImage) {
+            this.searchImage = this.lastFaceImage;
             this.capturedImage = this.lastFaceImage;
-        } else {
-            // Fallback to video frame if no face detected
-            this.capturedImage = this.videoSrc;
         }
         this.closeWebSocket();
         return;
@@ -128,6 +136,7 @@ export default {
       this.closeWebSocket() // Close existing if any
       
       this.capturedImage = ''; // Clear previous capture
+      this.searchImage = ''; // Clear previous search image
       this.lastFaceImage = ''; // Clear previous face
       
       // Assuming camera 0

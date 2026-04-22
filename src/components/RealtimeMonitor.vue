@@ -2,12 +2,18 @@
   <div class="realtime-monitor">
     <div class="monitor-container">
       <div class="top-panel">
-        <div class="all-default">0</div>
-        <div class="all-default-word">异常设备</div>
-        <div class="all-people">0</div>
-        <div class="all-people-word">出入人数</div>
-        <div class="all-number">0</div>
-        <div class="all-number-word">全部设备</div>
+        <div class="stat-item">
+          <div class="stat-num">0</div>
+          <div class="stat-label">异常设备</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-num">{{ entryCount }}</div>
+          <div class="stat-label">出入人数</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-num">{{ cameras.length }}</div>
+          <div class="stat-label">全部设备</div>
+        </div>
       </div>
       <div class="monitor-log-title">全部设备</div>
       <div class="monitor-log"></div>
@@ -34,8 +40,7 @@
         </div>
         <div class="fullscreen-video-placeholder">
           <!-- 真实的视频流显示区域 -->
-          <video v-if="localStream" ref="localVideo" autoplay playsinline class="realtime-video"></video>
-          <img v-else-if="videoSrc" :src="videoSrc" class="realtime-video" />
+          <img v-if="videoSrc" :src="videoSrc" class="realtime-video" />
           <div v-else class="placeholder-content">
             <img src="../assets/play.png" class="play-icon-large" />
             <p>等待视频流...</p>
@@ -59,50 +64,78 @@ export default {
       fullScreenCamera: null,
       ws: null,
       videoSrc: '',
-      localStream: null
+      entryCount: 0,
+      recordsWs: null,
+      reconnectTimer: null
     }
+  },
+  mounted() {
+    this.connectRecordsWebSocket();
   },
   beforeDestroy() {
     this.destroyWebSocket();
-    this.destroyLocalCamera();
+    if (this.recordsWs) {
+      this.recordsWs.close();
+    }
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+    }
   },
   methods: {
+    connectRecordsWebSocket() {
+      if (this.recordsWs) {
+        this.recordsWs.close();
+      }
+
+      this.recordsWs = new WebSocket('ws://localhost:8765/records');
+      
+      this.recordsWs.onopen = () => {
+        console.log('Connected to records stream for monitor stats');
+        
+        // 获取当天记录总数
+        const now = new Date();
+        const year = now.getFullYear();
+        const month = String(now.getMonth() + 1).padStart(2, '0');
+        const day = String(now.getDate()).padStart(2, '0');
+        const today = `${year}-${month}-${day}`;
+        
+        this.recordsWs.send(JSON.stringify({
+          type: 'get_date_records',
+          date: today
+        }));
+      };
+      
+      this.recordsWs.onmessage = (event) => {
+        try {
+          const message = JSON.parse(event.data);
+          // 初始化加载当天的记录时更新数量
+          if (message.type === 'new_record') {
+            this.entryCount += 1;
+          }
+        } catch (e) {
+          console.error('Error parsing record message:', e);
+        }
+      };
+      
+      this.recordsWs.onclose = () => {
+        console.log('Records stream closed, reconnecting in 3s...');
+        this.reconnectTimer = setTimeout(this.connectRecordsWebSocket, 3000);
+      };
+
+      this.recordsWs.onerror = (err) => {
+        console.error('Records WebSocket error:', err);
+        this.recordsWs.close();
+      };
+    },
     openCamera(camera) {
       console.log('Open camera:', camera.name)
       this.fullScreenCamera = camera
-      if (camera.id === 1) {
-        this.initLocalCamera()
-      } else {
-        this.initWebSocket(camera.wsUrl)
-      }
+      this.initWebSocket(camera.wsUrl)
     },
     closeCamera() {
       this.fullScreenCamera = null
-      if (this.localStream) {
-        this.destroyLocalCamera()
-      } else {
-        this.destroyWebSocket()
-      }
+      this.destroyWebSocket()
       this.videoSrc = ''
-    },
-    async initLocalCamera() {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-        this.localStream = stream;
-        this.$nextTick(() => {
-          if (this.$refs.localVideo) {
-            this.$refs.localVideo.srcObject = stream;
-          }
-        });
-      } catch (err) {
-        console.error('Error accessing local camera:', err);
-      }
-    },
-    destroyLocalCamera() {
-      if (this.localStream) {
-        this.localStream.getTracks().forEach(track => track.stop());
-        this.localStream = null;
-      }
     },
     initWebSocket(url) {
       this.destroyWebSocket(); // Ensure previous connection is closed
@@ -148,119 +181,53 @@ export default {
 
 <style scoped>
 .monitor-container {
-  width: 1920px;
+  width: 100%;
   height: 810px;
   background: rgba(0,0,0,0.04);
   border-radius: 0px 0px 0px 0px;
+  position: relative;
+  overflow-x: hidden;
 }
 
 .top-panel {
-  width: 1780px;
+  left: 50px;
+  right: 50px;
   height: 140px;
   background: #FFFFFF;
-  border-radius: 19px 19px 19px 19px;
+  border-radius: 19px;
   position: absolute;
-  left: 89px;
   top: 31px;
+  display: flex;
+  justify-content: space-around;
+  align-items: center;
 }
 
-.all-default {
-  position: absolute;
-  left: 164px;
-  top: 22px;
-  width: 32px;
-  height: 72px;
+.stat-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.stat-num {
   font-family: 'Source Han Sans', sans-serif;
   font-weight: 900;
   font-size: 48px;
   color: #3D3D3D;
-  line-height: 70px;
-  text-align: left;
-  font-style: normal;
-  text-transform: none;
+  line-height: 1;
 }
-.all-people {
-  position: absolute;
-  left: 885px;
-  top: 22px;
-  width: 32px;
-  height: 72px;
+
+.stat-label {
   font-family: 'Source Han Sans', sans-serif;
-  font-weight: 900;
-  font-size: 48px;
-  color: #3D3D3D;
-  line-height: 70px;
-  text-align: left;
-  font-style: normal;
-  text-transform: none;
-}
-.all-number {
-  position: absolute;
-  left: 1542px;
-  top: 22px;
-  width: 32px;
-  height: 72px;
-  font-family: 'Source Han Sans', sans-serif;
-  font-weight: 900;
-  font-size: 48px;
-  color: #3D3D3D;
-  line-height: 70px;
-  text-align: left;
-  font-style: normal;
-  text-transform: none;
-}
-.all-default-word{
-  position: absolute;
-  left: 128px;
-  top: 94px;
-  width: 127px;
-  height: 25px;
-  font-family: Source Han Sans, Source Han Sans;
   font-weight: 700;
   font-size: 24px;
   color: #E8E3E3;
-  line-height: 24px;
   letter-spacing: 3px;
-  text-align: left;
-  font-style: normal;
-  text-transform: none;
-}
-.all-people-word{
-  position: absolute;
-  left: 848px;
-  top: 94px;
-  width: 127px;
-  height: 25px;
-  font-family: Source Han Sans, Source Han Sans;
-  font-weight: 700;
-  font-size: 24px;
-  color: #E8E3E3;
-  line-height: 24px;
-  letter-spacing: 3px;
-  text-align: left;
-  font-style: normal;
-  text-transform: none;
-}
-.all-number-word{
-  position: absolute;
-  left: 1505px;
-  top: 94px;
-  width: 127px;
-  height: 25px;
-  font-family: Source Han Sans, Source Han Sans;
-  font-weight: 700;
-  font-size: 24px;
-  color: #E8E3E3;
-  line-height: 24px;
-  letter-spacing: 3px;
-  text-align: left;
-  font-style: normal;
-  text-transform: none;
 }
 
 .monitor-log-title {
   position: absolute;
-  left: 93px;
+  left: 50px;
   top: 192px;
   width: 156px;
   height: 73px;
@@ -275,7 +242,7 @@ export default {
 }
 .monitor-log {
   position: absolute;
-  left: 93px;
+  left: 50px;
   top: 250px;
   width: 30px;
   height: 15px;
@@ -283,12 +250,12 @@ export default {
   border-radius: 8px; 
 }
 .middle-panel {
-  width: 1780px;
+  left: 50px;
+  right: 50px;
   height: 448px;
   background: #FFFFFF;
-  border-radius: 19px 19px 19px 19px;
+  border-radius: 19px;
   position: absolute;
-  left: 89px;
   top: 286px;
   display: flex;
   align-items: center;
@@ -329,8 +296,8 @@ export default {
 }
 
 .fullscreen-content {
-  width: 90%;
-  height: 90%;
+  width: 1280px;
+  height: 720px;
   background-color: #000;
   border-radius: 12px;
   display: flex;
