@@ -219,12 +219,12 @@ def load_face_bank():
                     if img is None:
                         continue
                         
-                    # Get embedding
-                    # We assume the stored image contains a face. 
-                    # Use resize + flatten to match compare.py logic
+                    # 数据库中的图片已经是截取好的人脸，不需要再经过 MTCNN 检测处理
+                    # 直接调整大小后送入 MobileFaceNet (arcface) 提取特征，以保证维度一致 (512维)
                     try:
                         img_resized = cv2.resize(img, (112, 112))
-                        embedding = img_resized.flatten().reshape(1, -1)
+                        embedding = recognition_model.arcface(img_resized).reshape(1, -1)
+                        
                         new_face_bank_embeddings.append(embedding)
                         
                         # Store metadata (convert image to base64 for display if needed, or just store reference)
@@ -372,12 +372,11 @@ class CameraManager:
                             # Assuming 'faces' contains aligned face images
                             if i < len(faces):
                                 face_img = faces[i]
-                                # Preprocess for comparison (match load_face_bank logic)
-                                face_resized = cv2.resize(face_img, (112, 112))
-                                face_emb = face_resized.flatten()
+                                # Preprocess for comparison
+                                face_emb = recognition_model.arcface(face_img)
                                 
                                 # Compare with face bank
-                                match_idx = compare_embedding(face_emb, face_bank_embeddings, threshold=0.95)
+                                match_idx = compare_embedding(face_emb, face_bank_embeddings, threshold=0.6)
                                 
                                 if match_idx is not None:
                                     match_info = face_bank_metadata[match_idx]
@@ -412,23 +411,13 @@ class CameraManager:
 
                 # 获取检测到的人脸图片（第一张）
                 face_image_base64 = None
-                if len(bboxs) > 0:
+                if len(faces) > 0:
                     try:
-                        b = bboxs[0]
-                        x1, y1, x2, y2 = int(b[0]), int(b[1]), int(b[2]), int(b[3])
-                        # 确保坐标在图像范围内
-                        h, w, _ = frame.shape
-                        x1 = max(0, x1)
-                        y1 = max(0, y1)
-                        x2 = min(w, x2)
-                        y2 = min(h, y2)
-                        
-                        if x2 > x1 and y2 > y1:
-                            face_img = frame[y1:y2, x1:x2]
-                            _, face_buffer = cv2.imencode('.jpg', face_img)
-                            face_image_base64 = base64.b64encode(face_buffer).decode('utf-8')
+                        face_img = faces[0]
+                        _, face_buffer = cv2.imencode('.jpg', face_img)
+                        face_image_base64 = base64.b64encode(face_buffer).decode('utf-8')
                     except Exception as e:
-                        logging.error(f"Error cropping face: {e}")
+                        logging.error(f"Error extracting aligned face: {e}")
                 
                 # Encode frame
                 _, buffer_normal = cv2.imencode('.jpg', result_frame_normal)
@@ -525,13 +514,17 @@ async def handler(websocket, path):
                 return
 
             # Get embedding
-            # Use resize + flatten to match compare.py logic
             try:
-                img_resized = cv2.resize(img, (112, 112))
-                query_embedding = img_resized.flatten()
+                landmarks, bboxs, faces, embeddings = recognition_model(img)
+                if len(embeddings) > 0:
+                    query_embedding = embeddings[0]
+                else:
+                    # Fallback for tightly cropped images
+                    img_resized = cv2.resize(img, (112, 112))
+                    query_embedding = recognition_model.arcface(img_resized)
             except Exception as e:
                 logging.error(f"Error processing search image: {e}")
-                await websocket.send(json.dumps({"success": False, "message": "Error processing image"}))
+                await websocket.send(json.dumps({"success": False, "message": "处理图片时出错"}))
                 return
 
             # Compare with face bank
@@ -540,7 +533,7 @@ async def handler(websocket, path):
                 return
 
             # compare_embedding returns index or None
-            match_idx = compare_embedding(query_embedding, face_bank_embeddings, threshold=0.95)
+            match_idx = compare_embedding(query_embedding, face_bank_embeddings, threshold=0.4)
 
             if match_idx is not None:
                 match_info = face_bank_metadata[match_idx]
@@ -590,25 +583,14 @@ async def handler(websocket, path):
             # Detect face
             landmarks, bboxs, faces, embeddings = detect_model(img)
             
-            if len(bboxs) > 0:
+            if len(faces) > 0:
                 try:
-                    b = bboxs[0]
-                    x1, y1, x2, y2 = int(b[0]), int(b[1]), int(b[2]), int(b[3])
-                    h, w, _ = img.shape
-                    x1 = max(0, x1)
-                    y1 = max(0, y1)
-                    x2 = min(w, x2)
-                    y2 = min(h, y2)
-                    
-                    if x2 > x1 and y2 > y1:
-                        face_img = img[y1:y2, x1:x2]
-                        _, face_buffer = cv2.imencode('.jpg', face_img)
-                        face_image_base64 = base64.b64encode(face_buffer).decode('utf-8')
-                        await websocket.send(json.dumps({"success": True, "face_image": face_image_base64}))
-                    else:
-                        await websocket.send(json.dumps({"success": False, "message": "人脸坐标无效"}))
+                    face_img = faces[0]
+                    _, face_buffer = cv2.imencode('.jpg', face_img)
+                    face_image_base64 = base64.b64encode(face_buffer).decode('utf-8')
+                    await websocket.send(json.dumps({"success": True, "face_image": face_image_base64}))
                 except Exception as e:
-                    logging.error(f"Error cropping face: {e}")
+                    logging.error(f"Error extracting aligned face: {e}")
                     await websocket.send(json.dumps({"success": False, "message": "人脸截取失败"}))
             else:
                 await websocket.send(json.dumps({"success": False, "message": "未检测到人脸，请上传包含清晰人脸的照片"}))
