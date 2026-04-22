@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>测试双视频流 - 后端连接测试</title>
+    <style>
+        body { 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f4f6f9;
+            color: #333;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 20px;
+        }
+        h1 {
+            color: #045D8D;
+            margin-bottom: 30px;
+        }
+        .container {
+            display: flex;
+            gap: 40px;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+        .stream-box {
+            background: #ffffff;
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 8px 16px rgba(0,0,0,0.1);
+            text-align: center;
+            min-width: 400px;
+        }
+        .stream-box h3 {
+            margin-top: 0;
+            color: #555;
+            border-bottom: 2px solid #f0f0f0;
+            padding-bottom: 10px;
+        }
+        .video-container {
+            width: 100%;
+            height: 300px;
+            background-color: #000;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            border-radius: 8px;
+            overflow: hidden;
+            margin: 15px 0;
+            color: #888;
+            font-size: 14px;
+        }
+        img {
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: contain;
+            display: none;
+        }
+        .status-container {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 14px;
+            font-weight: bold;
+        }
+        .status {
+            padding: 5px 10px;
+            border-radius: 4px;
+        }
+        .connected { background-color: #e6f4ea; color: #28a745; }
+        .disconnected { background-color: #fce8e6; color: #dc3545; }
+        .fps { color: #666; font-family: monospace; }
+        
+        .stream-controls {
+            margin-top: 20px;
+            display: flex;
+            justify-content: center;
+            gap: 15px;
+        }
+        button {
+            padding: 8px 16px;
+            background-color: #045D8D;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background-color 0.2s, opacity 0.2s;
+        }
+        button:hover:not(:disabled) { background-color: #034870; }
+        button:disabled { background-color: #cccccc; cursor: not-allowed; opacity: 0.7; }
+        button.btn-stop { background-color: #dc3545; }
+        button.btn-stop:hover:not(:disabled) { background-color: #c82333; }
+        
+        .global-controls {
+            margin-top: 30px;
+            display: flex;
+            gap: 15px;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>WebSocket 双视频流联调测试页面</h1>
+    
+    <div class="container">
+        <!-- 视频流 0 容器 -->
+        <div class="stream-box">
+            <h3>摄像头 0 (ws://localhost:8765/0)</h3>
+            <div class="video-container" id="container0">
+                <span id="placeholder0">请点击下方按钮启动流</span>
+                <img id="stream0" alt="Stream 0" />
+            </div>
+            <div class="status-container">
+                <div id="status0" class="status disconnected">未连接</div>
+                <div class="fps" id="fps0">FPS: 0</div>
+            </div>
+            <div class="stream-controls">
+                <button id="btn-start-0" onclick="startStream(0)">启动流 0</button>
+                <button id="btn-stop-0" class="btn-stop" onclick="stopStream(0)" disabled>停止流 0</button>
+            </div>
+        </div>
+
+        <!-- 视频流 1 容器 -->
+        <div class="stream-box">
+            <h3>摄像头 1 (ws://localhost:8765/1)</h3>
+            <div class="video-container" id="container1">
+                <span id="placeholder1">请点击下方按钮启动流</span>
+                <img id="stream1" alt="Stream 1" />
+            </div>
+            <div class="status-container">
+                <div id="status1" class="status disconnected">未连接</div>
+                <div class="fps" id="fps1">FPS: 0</div>
+            </div>
+            <div class="stream-controls">
+                <button id="btn-start-1" onclick="startStream(1)">启动流 1</button>
+                <button id="btn-stop-1" class="btn-stop" onclick="stopStream(1)" disabled>停止流 1</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="global-controls">
+        <button onclick="startAll()">启动全部</button>
+        <button class="btn-stop" onclick="stopAll()">停止全部</button>
+    </div>
+
+    <script>
+        const streams = {};
+        const reconnectTimeouts = {};
+        const manualStopped = { 0: true, 1: true };
+
+        function startStream(cameraId) {
+            manualStopped[cameraId] = false;
+            
+            const btnStart = document.getElementById(`btn-start-${cameraId}`);
+            const btnStop = document.getElementById(`btn-stop-${cameraId}`);
+            btnStart.disabled = true;
+            btnStop.disabled = false;
+            
+            setupStream(cameraId);
+        }
+
+        function stopStream(cameraId) {
+            manualStopped[cameraId] = true;
+            
+            const btnStart = document.getElementById(`btn-start-${cameraId}`);
+            const btnStop = document.getElementById(`btn-stop-${cameraId}`);
+            btnStart.disabled = false;
+            btnStop.disabled = true;
+            
+            if (reconnectTimeouts[cameraId]) {
+                clearTimeout(reconnectTimeouts[cameraId]);
+                reconnectTimeouts[cameraId] = null;
+            }
+            
+            if (streams[cameraId]) {
+                streams[cameraId].close();
+                streams[cameraId] = null;
+            }
+            
+            const statusElement = document.getElementById(`status${cameraId}`);
+            const placeholderElement = document.getElementById(`placeholder${cameraId}`);
+            const imgElement = document.getElementById(`stream${cameraId}`);
+            const fpsElement = document.getElementById(`fps${cameraId}`);
+            
+            statusElement.textContent = '已停止';
+            statusElement.className = 'status disconnected';
+            placeholderElement.style.display = 'inline';
+            placeholderElement.textContent = '流已手动停止';
+            imgElement.style.display = 'none';
+            fpsElement.textContent = 'FPS: 0';
+        }
+
+        function setupStream(cameraId) {
+            const imgElement = document.getElementById(`stream${cameraId}`);
+            const statusElement = document.getElementById(`status${cameraId}`);
+            const placeholderElement = document.getElementById(`placeholder${cameraId}`);
+            const fpsElement = document.getElementById(`fps${cameraId}`);
+            
+            const wsUrl = `ws://localhost:8765/${cameraId}`;
+            
+            let framesCount = 0;
+            let lastTime = performance.now();
+
+            if (streams[cameraId]) {
+                streams[cameraId].close();
+            }
+
+            let ws = new WebSocket(wsUrl);
+            streams[cameraId] = ws;
+            
+            ws.onopen = () => {
+                statusElement.textContent = '已连接';
+                statusElement.className = 'status connected';
+                placeholderElement.textContent = '等待第一帧数据...';
+                console.log(`Connected to ${wsUrl}`);
+            };
+            
+            ws.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    if (data.image) {
+                        imgElement.src = 'data:image/jpeg;base64,' + data.image;
+                        imgElement.style.display = 'block';
+                        placeholderElement.style.display = 'none';
+
+                        // Calculate FPS
+                        framesCount++;
+                        const now = performance.now();
+                        if (now - lastTime >= 1000) {
+                            fpsElement.textContent = `FPS: ${Math.round((framesCount * 1000) / (now - lastTime))}`;
+                            framesCount = 0;
+                            lastTime = now;
+                        }
+                    }
+                } catch (e) {
+                    console.error(`Error parsing message on stream ${cameraId}:`, e);
+                }
+            };
+            
+            ws.onclose = () => {
+                if (manualStopped[cameraId]) return; // 如果是手动停止的，不自动重连
+
+                statusElement.textContent = '已断开连接';
+                statusElement.className = 'status disconnected';
+                placeholderElement.style.display = 'inline';
+                placeholderElement.textContent = '连接已断开，尝试重连中...';
+                imgElement.style.display = 'none';
+                fpsElement.textContent = 'FPS: 0';
+                console.log(`Disconnected from ${wsUrl}`);
+                
+                // Auto reconnect
+                reconnectTimeouts[cameraId] = setTimeout(() => setupStream(cameraId), 3000);
+            };
+            
+            ws.onerror = (err) => {
+                console.error(`WebSocket error on ${wsUrl}:`, err);
+                if (!manualStopped[cameraId]) {
+                    statusElement.textContent = '连接错误';
+                }
+            };
+        }
+
+        function startAll() {
+            startStream(0);
+            startStream(1);
+        }
+
+        function stopAll() {
+            stopStream(0);
+            stopStream(1);
+        }
+    </script>
+</body>
+</html>
